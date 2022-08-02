@@ -1,0 +1,11 @@
+data
+models
+raw
+paper
+.ipynb_checkpoints
+src/*.sh
+src/capsules
+src/lightning_checkpoints
+src/__pycache__
+src/.ipynb_checkpoints
+src/PlotNeuralNet

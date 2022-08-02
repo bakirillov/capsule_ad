@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="content-type" content="text/html;charset=utf-8">
+  <title>train_model.py</title>
+  <link rel="stylesheet" href="pycco.css">
+</head>
+<body>
+<div id='container'>
+  <div id="background"></div>
+  <div class='section'>
+    <div class='docs'><h1>train_model.py</h1></div>
+  </div>
+  <div class='clearall'>
+  <div class='section' id='section-0'>
+    <div class='docs'>
+      <div class='octowrap'>
+        <a class='octothorpe' href='#section-0'>#</a>
+      </div>
+      <p>The script to reproduce the model training.
+This file provides the code to train every model.
+This file is to be ran as a standalone script.</p>
+    </div>
+    <div class='code'>
+      <div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">einops</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pickle</span> <span class="k">as</span> <span class="nn">pkl</span>
+<span class="kn">import</span> <span class="nn">os.path</span> <span class="k">as</span> <span class="nn">op</span>
+<span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+<span class="kn">from</span> <span class="nn">skimage</span> <span class="kn">import</span> <span class="n">io</span>
+<span class="kn">from</span> <span class="nn">torch.optim</span> <span class="kn">import</span> <span class="n">Adam</span>
+<span class="kn">import</span> <span class="nn">pytorch_lightning</span> <span class="k">as</span> <span class="nn">pl</span>
+<span class="kn">from</span> <span class="nn">capsules.capsules</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">from</span> <span class="nn">skimage.transform</span> <span class="kn">import</span> <span class="n">resize</span>
+<span class="kn">from</span> <span class="nn">torchvision</span> <span class="kn">import</span> <span class="n">models</span><span class="p">,</span> <span class="n">transforms</span>
+<span class="kn">from</span> <span class="nn">torch.nn.functional</span> <span class="kn">import</span> <span class="n">tanh</span><span class="p">,</span> <span class="n">sigmoid</span>
+<span class="kn">from</span> <span class="nn">torch.utils.data</span> <span class="kn">import</span> <span class="n">DataLoader</span><span class="p">,</span> <span class="n">Dataset</span>
+<span class="kn">from</span> <span class="nn">torch.nn</span> <span class="kn">import</span> <span class="n">Conv2d</span><span class="p">,</span> <span class="n">ReLU</span><span class="p">,</span> <span class="n">ELU</span><span class="p">,</span> <span class="n">LeakyReLU</span><span class="p">,</span> <span class="n">Conv1d</span>
+<span class="kn">from</span> <span class="nn">torch.nn</span> <span class="kn">import</span> <span class="n">Sequential</span><span class="p">,</span> <span class="n">Linear</span><span class="p">,</span> <span class="n">Tanh</span><span class="p">,</span> <span class="n">Sigmoid</span><span class="p">,</span> <span class="n">MSELoss</span>
+<span class="kn">from</span> <span class="nn">pytorch_lightning.callbacks.early_stopping</span> <span class="kn">import</span> <span class="n">EarlyStopping</span>
+
+<span class="kn">from</span> <span class="nn">models</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">from</span> <span class="nn">data_module</span> <span class="kn">import</span> <span class="o">*</span></pre></div>
+    </div>
+  </div>
+  <div class='clearall'></div>
+  <div class='section' id='section-1'>
+    <div class='docs'>
+      <div class='octowrap'>
+        <a class='octothorpe' href='#section-1'>#</a>
+      </div>
+      <p>This defines transforms for the datasets</p>
+    </div>
+    <div class='code'>
+      <div class="highlight"><pre><span class="n">cifar_transforms</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">Compose</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">io</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">einops</span><span class="o">.</span><span class="n">rearrange</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;h w c -&gt; c h w&quot;</span>
+        <span class="p">)</span><span class="o">/</span><span class="mf">255.0</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">mnist_transforms</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">Compose</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">io</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">einops</span><span class="o">.</span><span class="n">rearrange</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;h w -&gt; 1 h w&quot;</span><span class="p">,</span>
+        <span class="p">)</span><span class="o">/</span><span class="mf">255.0</span><span class="p">,</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">peng_transforms</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">Compose</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">correct_order</span><span class="p">(</span><span class="n">onehot</span><span class="p">(</span><span class="n">a</span><span class="p">))</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)]),</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">einops</span><span class="o">.</span><span class="n">rearrange</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;c (h w) -&gt; c h w&quot;</span><span class="p">,</span> <span class="n">h</span> <span class="o">=</span> <span class="mi">4</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">ham_transforms</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">Compose</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">io</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">resize</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">100</span><span class="p">)),</span>
+        <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">einops</span><span class="o">.</span><span class="n">rearrange</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;h w c -&gt; c h w&quot;</span>
+        <span class="p">)</span><span class="o">/</span><span class="mf">255.0</span>
+    <span class="p">]</span>
+<span class="p">)</span></pre></div>
+    </div>
+  </div>
+  <div class='clearall'></div>
+  <div class='section' id='section-2'>
+    <div class='docs'>
+      <div class='octowrap'>
+        <a class='octothorpe' href='#section-2'>#</a>
+      </div>
+      <p>Transforms, batch sizes, models and paths are stored in dicts
+The distc are quieried by the command line arguments</p>
+    </div>
+    <div class='code'>
+      <div class="highlight"><pre><span class="n">TRANSFORMS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="n">mnist_transforms</span><span class="p">,</span>
+    <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="n">mnist_transforms</span><span class="p">,</span>
+    <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="n">mnist_transforms</span><span class="p">,</span>
+    <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="n">cifar_transforms</span><span class="p">,</span>
+    <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="n">ham_transforms</span><span class="p">,</span>
+    <span class="s2">&quot;PENG&quot;</span><span class="p">:</span> <span class="n">peng_transforms</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="n">BATCH_SIZES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+    <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+    <span class="s2">&quot;PENG&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="n">MODELS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;S&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;NL&quot;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">NL</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">28</span><span class="p">,</span><span class="mi">28</span><span class="p">),</span> <span class="mi">500</span><span class="p">),</span>
+            <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">NL</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">28</span><span class="p">,</span><span class="mi">28</span><span class="p">),</span> <span class="mi">500</span><span class="p">),</span>
+            <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">NL</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">28</span><span class="p">,</span><span class="mi">28</span><span class="p">),</span> <span class="mi">500</span><span class="p">),</span>
+            <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">NL</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span><span class="mi">32</span><span class="p">,</span><span class="mi">32</span><span class="p">),</span> <span class="mi">500</span><span class="p">),</span>
+            <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">NL</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span><span class="mi">75</span><span class="p">,</span><span class="mi">100</span><span class="p">),</span> <span class="mi">500</span><span class="p">),</span>
+            <span class="s2">&quot;PENG&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">NL</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">23</span><span class="p">),</span> <span class="mi">500</span><span class="p">),</span>
+        <span class="p">},</span>
+        <span class="s2">&quot;ABC&quot;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">ABC</span><span class="p">(</span><span class="n">input_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">),</span> <span class="n">nll</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">ABC</span><span class="p">(</span><span class="n">input_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">),</span> <span class="n">nll</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">ABC</span><span class="p">(</span><span class="n">input_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">),</span> <span class="n">nll</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">ABC</span><span class="p">(</span><span class="n">input_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="o">*</span><span class="mi">32</span><span class="o">*</span><span class="mi">32</span><span class="p">),</span> <span class="n">nll</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">ABC</span><span class="p">(</span><span class="n">input_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="o">*</span><span class="mi">75</span><span class="o">*</span><span class="mi">100</span><span class="p">),</span> <span class="n">nll</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="s2">&quot;PENG&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">ABC</span><span class="p">(</span><span class="n">input_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="mi">4</span><span class="o">*</span><span class="mi">23</span><span class="p">),</span> <span class="n">nll</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="p">},</span>
+        <span class="s2">&quot;CN&quot;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">),</span>
+            <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">),</span>
+            <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">),</span>
+            <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">2048</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="o">*</span><span class="mi">32</span><span class="o">*</span><span class="mi">32</span><span class="p">),</span>
+            <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4HAM</span><span class="p">(</span><span class="mi">40320</span><span class="p">,</span> <span class="mi">3</span><span class="o">*</span><span class="mi">100</span><span class="o">*</span><span class="mi">75</span><span class="p">),</span>
+            <span class="s2">&quot;PENG&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">352</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="mi">4</span><span class="o">*</span><span class="mi">23</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">primcaps_kernel_size</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+        <span class="p">}</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;U&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;DI&quot;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">&quot;CN&quot;</span><span class="p">:</span> <span class="p">{</span>
+                <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">9</span><span class="p">),</span>
+                <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">9</span><span class="p">),</span>
+                <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">9</span><span class="p">),</span>
+                <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">2048</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="o">*</span><span class="mi">32</span><span class="o">*</span><span class="mi">32</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">9</span><span class="p">),</span>
+                <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4HAM</span><span class="p">(</span><span class="mi">40320</span><span class="p">,</span> <span class="mi">3</span><span class="o">*</span><span class="mi">100</span><span class="o">*</span><span class="mi">75</span><span class="p">),</span>
+            <span class="p">}</span>
+        <span class="p">},</span>
+        <span class="s2">&quot;DO&quot;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">&quot;CN&quot;</span><span class="p">:</span> <span class="p">{</span>
+                <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span>
+                <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span>
+                <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">1152</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="o">*</span><span class="mi">28</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span>
+                <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4AD</span><span class="p">(</span><span class="mi">2048</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="o">*</span><span class="mi">32</span><span class="o">*</span><span class="mi">32</span><span class="p">,</span> <span class="n">n_classes</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span>
+                <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">CapsNet4HAM</span><span class="p">(</span><span class="mi">40320</span><span class="p">,</span> <span class="mi">3</span><span class="o">*</span><span class="mi">100</span><span class="o">*</span><span class="mi">75</span><span class="p">),</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+
+<span class="n">PATHS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;MNIST&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;../data/MNIST_train.csv&quot;</span><span class="p">,</span> <span class="s2">&quot;../data/MNIST_test.csv&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;FMNIST&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;../data/FMNIST_train.csv&quot;</span><span class="p">,</span> <span class="s2">&quot;../data/FMNIST_test.csv&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;KMNIST&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;../data/KMNIST_train.csv&quot;</span><span class="p">,</span> <span class="s2">&quot;../data/KMNIST_test.csv&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;CIFAR10&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;../data/CIFAR10_train.csv&quot;</span><span class="p">,</span> <span class="s2">&quot;../data/CIFAR10_test.csv&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;../data/HAM10000_train.csv&quot;</span><span class="p">,</span> <span class="s2">&quot;../data/HAM10000_test.csv&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;PENG&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;../data/PENG_train.csv&quot;</span><span class="p">,</span> <span class="s2">&quot;../data/PENG_test.csv&quot;</span><span class="p">),</span>
+<span class="p">}</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-d&quot;</span><span class="p">,</span> <span class="s2">&quot;--dataset&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;dataset&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the dataset&quot;</span><span class="p">,</span> 
+        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;MNIST&quot;</span><span class="p">,</span>
+        <span class="n">choices</span><span class="o">=</span><span class="p">[</span>
+            <span class="s2">&quot;MNIST&quot;</span><span class="p">,</span> <span class="s2">&quot;FMNIST&quot;</span><span class="p">,</span> <span class="s2">&quot;KMNIST&quot;</span><span class="p">,</span> <span class="s2">&quot;CIFAR10&quot;</span><span class="p">,</span> <span class="s2">&quot;HAM10000&quot;</span><span class="p">,</span> <span class="s2">&quot;PENG&quot;</span>
+        <span class="p">]</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-t&quot;</span><span class="p">,</span> <span class="s2">&quot;--type&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;et&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the experiment type&quot;</span><span class="p">,</span> 
+        <span class="n">default</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;SDI&quot;</span><span class="p">],</span> 
+        <span class="n">choices</span><span class="o">=</span><span class="p">[</span>
+            <span class="s2">&quot;SDI&quot;</span><span class="p">,</span> <span class="s2">&quot;SDO&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;UDI&quot;</span><span class="p">,</span> <span class="s2">&quot;UDO&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;SA&quot;</span><span class="p">,</span> <span class="s2">&quot;SB&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;SC&quot;</span><span class="p">,</span> <span class="s2">&quot;SD&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;UA&quot;</span><span class="p">,</span> <span class="s2">&quot;UB&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;UC&quot;</span><span class="p">,</span> <span class="s2">&quot;UD&quot;</span><span class="p">,</span>
+        <span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-m&quot;</span><span class="p">,</span> <span class="s2">&quot;--model&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;model&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the model to train&quot;</span><span class="p">,</span> 
+        <span class="n">default</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;CN&quot;</span><span class="p">],</span> 
+        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;CN&quot;</span><span class="p">,</span> <span class="s2">&quot;ABC&quot;</span><span class="p">,</span> <span class="s2">&quot;NL&quot;</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-l&quot;</span><span class="p">,</span> <span class="s2">&quot;--label&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;cl&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the chosen label&quot;</span><span class="p">,</span> 
+        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-e&quot;</span><span class="p">,</span> <span class="s2">&quot;--epochs&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;epochs&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the number of epochs&quot;</span><span class="p">,</span> 
+        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;10&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-p&quot;</span><span class="p">,</span> <span class="s2">&quot;--proportion&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;proportion&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the proportion of anomalies&quot;</span><span class="p">,</span> 
+        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;None&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-o&quot;</span><span class="p">,</span> <span class="s2">&quot;--output&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;output&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the path of output directory&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-s&quot;</span><span class="p">,</span> <span class="s2">&quot;--seed&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;seed&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;set the random seed&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;-i&quot;</span><span class="p">,</span> <span class="s2">&quot;--indices&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;indices&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span> 
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;use indices&quot;</span>
+    <span class="p">)</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
+    <span class="n">seed</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">seed</span><span class="p">)</span>
+    <span class="n">pl</span><span class="o">.</span><span class="n">utilities</span><span class="o">.</span><span class="n">seed</span><span class="o">.</span><span class="n">seed_everything</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">op</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">output</span><span class="p">):</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Created &quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">dataset</span> <span class="o">!=</span> <span class="s2">&quot;HAM10000&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">dataset</span> <span class="o">!=</span> <span class="s2">&quot;PENG&quot;</span><span class="p">:</span>
+            <span class="n">experiment_type</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="o">+</span><span class="s2">&quot;_&quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">cl</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">experiment_type</span> <span class="o">=</span> <span class="s2">&quot;original_label&quot;</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">experiment_type</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+    <span class="n">output_filename</span> <span class="o">=</span> <span class="n">op</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">args</span><span class="o">.</span><span class="n">output</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="o">+</span><span class="s2">&quot;_&quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">model</span><span class="o">+</span><span class="s2">&quot;_&quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="o">+</span><span class="s2">&quot;_&quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">cl</span><span class="o">+</span><span class="s2">&quot;_&quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">proportion</span><span class="o">+</span><span class="s2">&quot;_&quot;</span><span class="o">+</span><span class="n">args</span><span class="o">.</span><span class="n">seed</span><span class="o">+</span><span class="s2">&quot;.pt&quot;</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">proportion</span> <span class="o">!=</span> <span class="s2">&quot;None&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">float</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">proportion</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">proportion</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">proportion</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">proportion</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">proportion</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">proportion</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">batch_size</span> <span class="o">=</span> <span class="n">BATCH_SIZES</span><span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">]</span>
+    <span class="n">transforms</span> <span class="o">=</span> <span class="n">TRANSFORMS</span><span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">]</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="p">,</span> <span class="n">proportion</span><span class="p">)</span></pre></div>
+    </div>
+  </div>
+  <div class='clearall'></div>
+  <div class='section' id='section-3'>
+    <div class='docs'>
+      <div class='octowrap'>
+        <a class='octothorpe' href='#section-3'>#</a>
+      </div>
+      <p>Here, the dicts provided above are queried</p>
+    </div>
+    <div class='code'>
+      <div class="highlight"><pre>    <span class="n">dm</span> <span class="o">=</span> <span class="n">DM</span><span class="p">(</span>
+        <span class="n">PATHS</span><span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> 
+        <span class="n">PATHS</span><span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">][</span><span class="mi">1</span><span class="p">],</span> 
+        <span class="n">experiment_type</span><span class="p">,</span> <span class="n">proportion</span><span class="p">,</span> <span class="n">transforms</span><span class="p">,</span> 
+        <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">use_indices</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">indices</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;S&quot;</span><span class="p">:</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">MODELS</span><span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="p">[</span><span class="mi">0</span><span class="p">]][</span><span class="n">args</span><span class="o">.</span><span class="n">model</span><span class="p">][</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">]()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">MODELS</span><span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="p">[</span><span class="mi">0</span><span class="p">]][</span><span class="n">args</span><span class="o">.</span><span class="n">et</span><span class="p">[</span><span class="mi">1</span><span class="p">:]][</span><span class="n">args</span><span class="o">.</span><span class="n">model</span><span class="p">][</span><span class="n">args</span><span class="o">.</span><span class="n">dataset</span><span class="p">]()</span></pre></div>
+    </div>
+  </div>
+  <div class='clearall'></div>
+  <div class='section' id='section-4'>
+    <div class='docs'>
+      <div class='octowrap'>
+        <a class='octothorpe' href='#section-4'>#</a>
+      </div>
+      <p>NL models require a bit different approach in training
+So for everything else, the training is done by Lightning trainer</p>
+    </div>
+    <div class='code'>
+      <div class="highlight"><pre>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">model</span> <span class="o">!=</span> <span class="s2">&quot;NL&quot;</span><span class="p">:</span>
+        <span class="n">es</span> <span class="o">=</span> <span class="n">EarlyStopping</span><span class="p">(</span><span class="n">monitor</span><span class="o">=</span><span class="s1">&#39;val_loss&#39;</span><span class="p">,</span> <span class="n">patience</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">trainer</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">Trainer</span><span class="p">(</span>
+            <span class="n">gpus</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">,</span> <span class="n">max_epochs</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">epochs</span><span class="p">),</span>
+            <span class="n">default_root_dir</span><span class="o">=</span><span class="n">output_filename</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;.pt&quot;</span><span class="p">,</span> <span class="s2">&quot;_logs&quot;</span><span class="p">),</span>
+            <span class="n">callbacks</span><span class="o">=</span><span class="p">[</span><span class="n">es</span><span class="p">],</span> <span class="n">gradient_clip_val</span><span class="o">=</span><span class="mf">0.1</span>
+        <span class="p">)</span>
+        <span class="n">trainer</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">dm</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span></pre></div>
+    </div>
+  </div>
+  <div class='clearall'></div>
+  <div class='section' id='section-5'>
+    <div class='docs'>
+      <div class='octowrap'>
+        <a class='octothorpe' href='#section-5'>#</a>
+      </div>
+      <p>But for NLs, training code is as follows
+Adapted from https://github.com/eugenet12/pytorch-rbm-autoencoder</p>
+    </div>
+    <div class='code'>
+      <div class="highlight"><pre>        <span class="n">dm</span><span class="o">.</span><span class="n">prepare_data</span><span class="p">()</span>
+        <span class="n">dm</span><span class="o">.</span><span class="n">setup</span><span class="p">()</span>
+        <span class="n">dm</span><span class="o">.</span><span class="n">train_dataloader</span><span class="p">()</span>
+        <span class="n">prev_pn</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">improved</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">epochs</span><span class="p">)):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">epochs</span><span class="p">,</span> <span class="n">improved</span><span class="p">,</span> <span class="n">j</span><span class="p">,</span> <span class="n">prev_pn</span><span class="p">)</span>
+            <span class="n">this_epoch</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">tqdm</span><span class="p">(</span><span class="n">dm</span><span class="o">.</span><span class="n">train_loader</span><span class="p">):</span>
+                <span class="n">p</span><span class="p">,</span><span class="n">n</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">training_step</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+                <span class="n">this_epoch</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span>
+            <span class="n">mnp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">this_epoch</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">mnp</span> <span class="o">&lt;</span> <span class="n">prev_pn</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Loss improved from &quot;</span><span class="o">+</span><span class="nb">str</span><span class="p">(</span><span class="n">prev_pn</span><span class="p">)</span><span class="o">+</span><span class="s2">&quot; to &quot;</span><span class="o">+</span><span class="nb">str</span><span class="p">(</span><span class="n">mnp</span><span class="p">))</span>
+                <span class="n">prev_pn</span> <span class="o">=</span> <span class="n">mnp</span>
+                <span class="n">improved</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">improved</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">improved</span><span class="p">:</span>
+                <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="k">if</span> <span class="n">j</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Loss haven&#39;t improved for 3 epoch. Stopping.&quot;</span><span class="p">)</span>
+                <span class="k">break</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">state_dict</span><span class="p">(),</span> <span class="n">output_filename</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;State dictionary saved to &quot;</span><span class="o">+</span><span class="n">output_filename</span><span class="p">)</span>
+
+</pre></div>
+    </div>
+  </div>
+  <div class='clearall'></div>
+</div>
+</body>
